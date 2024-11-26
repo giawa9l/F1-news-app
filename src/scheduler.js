@@ -27,7 +27,13 @@ export class NewsScheduler {
       const startTime = Date.now();
 
       // Fetch and process news
-      const articles = await scrapeF1News();
+      const result = await scrapeF1News();
+      const articles = result.articles || result.fallbackArticles;
+      
+      if (!articles || !Array.isArray(articles) || articles.length === 0) {
+        throw new Error('No valid articles returned from scraper');
+      }
+      
       logger.info(`Fetched ${articles.length} articles`);
 
       // Save to database
@@ -45,9 +51,9 @@ export class NewsScheduler {
       const duration = (Date.now() - startTime) / 1000;
       logger.info(`Update completed successfully in ${duration}s`);
 
-      // Record metrics
+      // Record metrics - using REPLACE INTO instead of INSERT
       await this.db.run(`
-        INSERT INTO metadata (key, value)
+        REPLACE INTO metadata (key, value)
         VALUES ('last_update_duration', ?)
       `, [duration.toString()]);
 
@@ -75,9 +81,9 @@ export class NewsScheduler {
       lastSuccess: await this.db.getLastFetchTime()
     }, 'Critical failure in news update process');
 
-    // Store failure in database for monitoring
+    // Store failure in database for monitoring - using REPLACE INTO
     await this.db.run(`
-      INSERT INTO metadata (key, value)
+      REPLACE INTO metadata (key, value)
       VALUES ('last_failure', ?), ('failure_reason', ?)
     `, [new Date().toISOString(), error.message]);
   }
@@ -94,29 +100,34 @@ export class NewsScheduler {
     return metrics;
   }
 
-  start() {
-    // Run initial update
-    this.processUpdate();
+  async start() {
+    try {
+      // Run initial update
+      await this.processUpdate();
 
-    // Schedule hourly updates
-    schedule.scheduleJob('0 * * * *', () => {
-      this.processUpdate();
-    });
+      // Schedule hourly updates
+      schedule.scheduleJob('0 * * * *', () => {
+        this.processUpdate();
+      });
 
-    // Schedule daily cleanup of old articles (keep last 7 days)
-    schedule.scheduleJob('0 0 * * *', async () => {
-      try {
-        await this.db.run(`
-          DELETE FROM articles 
-          WHERE created_at < strftime('%s', 'now', '-7 days')
-        `);
-        logger.info('Completed daily cleanup of old articles');
-      } catch (error) {
-        logger.error({ err: error }, 'Failed to cleanup old articles');
-      }
-    });
+      // Schedule daily cleanup of old articles (keep last 7 days)
+      schedule.scheduleJob('0 0 * * *', async () => {
+        try {
+          await this.db.run(`
+            DELETE FROM articles 
+            WHERE created_at < strftime('%s', 'now', '-7 days')
+          `);
+          logger.info('Completed daily cleanup of old articles');
+        } catch (error) {
+          logger.error({ err: error }, 'Failed to cleanup old articles');
+        }
+      });
 
-    logger.info('News scheduler started successfully');
+      logger.info('News scheduler started successfully');
+    } catch (error) {
+      logger.error({ err: error }, 'Failed to start news scheduler');
+      throw error; // Re-throw to be caught by the caller
+    }
   }
 
   stop() {

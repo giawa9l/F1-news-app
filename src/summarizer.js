@@ -3,6 +3,11 @@ import { logger } from './logger.js';
 import { performance } from 'perf_hooks';
 import { Worker, isMainThread, parentPort, workerData } from 'worker_threads';
 import { cpus } from 'os';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
 export class SummarizationError extends Error {
   constructor(message = 'Summarization failed') {
@@ -38,24 +43,10 @@ export class NewsSummarizer {
     // Initialize worker pool
     this.workerPool = [];
     const numWorkers = Math.max(1, cpus().length - 1); // Leave one core free
+    const workerPath = join(__dirname, 'workers', 'phrase-worker.js');
+    
     for (let i = 0; i < numWorkers; i++) {
-      this.workerPool.push(new Worker(`
-        const { parentPort } = require('worker_threads');
-        
-        parentPort.on('message', ({ text, commonWords }) => {
-          const words = text.toLowerCase()
-            .replace(/[^\\w\\s]/g, '')
-            .split(/\\s+/)
-            .filter(word => !commonWords.has(word));
-
-          const phrases = [];
-          for (let i = 0; i < words.length - 2; i++) {
-            phrases.push(words.slice(i, i + 3).join(' '));
-          }
-          
-          parentPort.postMessage(phrases);
-        });
-      `));
+      this.workerPool.push(new Worker(workerPath));
     }
   }
 

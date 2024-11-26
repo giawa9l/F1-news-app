@@ -32,6 +32,7 @@ export const FALLBACK_CONTENT = {
   fallbackArticles: [
     {
       title: 'Service Temporarily Unavailable',
+      url: 'https://f1-news-app.local/service-unavailable',
       snippet: 'We are unable to fetch the latest news at this moment. Please try again later.',
       source: 'System',
       publishDate: new Date().toLocaleDateString()

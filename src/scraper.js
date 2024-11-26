@@ -34,12 +34,12 @@ function validateArticleData(articleData) {
   const missing = required.filter(field => !articleData[field]);
   
   if (missing.length > 0) {
-    logger.warn({ missing }, 'Article missing required fields');
+    logger.warn({ missing, articleData }, 'Article missing required fields');
     return false;
   }
 
   // Basic content validation
-  if (articleData.title.length < 10 || articleData.snippet.length < 20) {
+  if (articleData.title.length < 10) {
     logger.warn({ articleData }, 'Article content too short');
     return false;
   }
@@ -50,28 +50,47 @@ function validateArticleData(articleData) {
 function extractArticleData($, element) {
   try {
     const article = $(element);
-    const titleElement = article.find('h3');
-    const linkElement = titleElement.find('a');
-    const sourceElement = article.find('time').parent();
-
-    if (!titleElement.length || !linkElement.length) {
+    
+    // Get title and URL from the JtKRv class element
+    const titleElement = article.find('.JtKRv');
+    if (!titleElement.length) {
+      logger.warn('Title element not found');
       throw new Error('Required elements not found');
     }
 
     const title = titleElement.text().trim();
-    const relativeUrl = linkElement.attr('href');
+    const relativeUrl = titleElement.attr('href');
     
     if (!relativeUrl) {
+      logger.warn('URL attribute not found');
       throw new Error('Article URL not found');
     }
 
-    const url = `https://news.google.com${relativeUrl.replace('./', '/')}`;
-    const source = sourceElement.find('a').first().text().trim();
-    const dateStr = article.find('time').attr('datetime');
-    const publishDate = dateStr ? new Date(dateStr).toLocaleDateString() : 'Unknown';
-    const snippet = article.find('div[class*="snippet"]').text().trim() || 'No snippet available';
+    // Get source from vr1PYe class
+    const sourceElement = article.find('.vr1PYe');
+    const source = sourceElement.text().trim() || 'Unknown Source';
+
+    // Get date from hvbAAd class
+    const timeElement = article.find('.hvbAAd');
+    const dateStr = timeElement.attr('datetime');
+    const publishDate = dateStr ? new Date(dateStr).toLocaleDateString() : new Date().toLocaleDateString();
+
+    // Get author from bInasb class
+    const authorElement = article.find('.bInasb span');
+    const author = authorElement.text().trim();
+
+    // Use the title as snippet since Google News doesn't show full snippets in search
+    const snippet = `${title}${author ? ` - By ${author}` : ''}`;
+
+    // Handle URL format
+    const url = relativeUrl.startsWith('http') 
+      ? relativeUrl 
+      : `https://news.google.com${relativeUrl.replace('./', '/')}`;
 
     const articleData = { title, url, source, publishDate, snippet };
+
+    // Log the extracted data for debugging
+    logger.debug({ articleData }, 'Extracted article data');
 
     if (!validateArticleData(articleData)) {
       return null;
@@ -79,21 +98,24 @@ function extractArticleData($, element) {
 
     return articleData;
   } catch (error) {
-    logger.warn({ error: error.message }, 'Failed to parse article');
+    logger.warn({ 
+      error: error.message,
+      html: $(element).html()
+    }, 'Failed to parse article');
     return null;
   }
 }
 
 function detectGoogleNewsStructureChange($) {
-  // Check for expected structure
-  const hasArticles = $('article').length > 0;
-  const hasHeaders = $('h3').length > 0;
-  const hasTimeElements = $('time').length > 0;
+  // Check for expected structure with the new selectors
+  const hasArticles = $('.m5k28').length > 0;
+  const hasTitles = $('.JtKRv').length > 0;
+  const hasTimeElements = $('.hvbAAd').length > 0;
 
-  if (!hasArticles || !hasHeaders || !hasTimeElements) {
+  if (!hasArticles || !hasTitles || !hasTimeElements) {
     logger.error({
       articles: hasArticles,
-      headers: hasHeaders,
+      titles: hasTitles,
       timeElements: hasTimeElements
     }, 'Google News structure may have changed');
     
@@ -106,10 +128,18 @@ function detectGoogleNewsStructureChange($) {
 async function fetchWithFallback(url, retryCount = 0) {
   try {
     const response = await limit(() => httpClient.get(url));
+    
+    // Log response details for debugging
+    logger.debug({
+      status: response.status,
+      headers: response.headers,
+      dataLength: response.data.length
+    }, 'Fetch response details');
+
     return response.data;
   } catch (error) {
     if (error instanceof RequestTimeoutError || error instanceof ProxyError) {
-      throw error; // Let these be handled by the caller
+      throw error;
     }
 
     if (retryCount < CONFIG.MAX_RETRIES) {
@@ -118,7 +148,6 @@ async function fetchWithFallback(url, retryCount = 0) {
         attempt: retryCount + 1 
       }, 'Retrying fetch with fallback');
       
-      // Exponential backoff
       await new Promise(resolve => 
         setTimeout(resolve, Math.min(1000 * Math.pow(2, retryCount), 10000))
       );
@@ -133,15 +162,17 @@ async function fetchWithFallback(url, retryCount = 0) {
 export async function scrapeF1News() {
   try {
     const url = buildUrl();
+    logger.info({ url }, 'Fetching news from URL');
+
     const html = await fetchWithFallback(url);
     const $ = cheerio.load(html);
 
-    // Check for structural changes
     if (detectGoogleNewsStructureChange($)) {
-      throw new ScrapingError('Google News structure has changed');
+      logger.warn('Using fallback content due to structure change');
+      return FALLBACK_CONTENT;
     }
 
-    const articles = $('article')
+    const articles = $('.m5k28')
       .slice(0, 5)
       .map((_, element) => extractArticleData($, element))
       .get()
@@ -149,10 +180,7 @@ export async function scrapeF1News() {
 
     if (articles.length === 0) {
       logger.error('No valid articles found');
-      return {
-        ...FALLBACK_CONTENT,
-        error: 'No valid articles could be extracted'
-      };
+      return FALLBACK_CONTENT;
     }
 
     // Quality check
@@ -188,10 +216,6 @@ export async function scrapeF1News() {
       throw new ScrapingError('All proxies failed', error);
     }
 
-    // For any other errors, return fallback content
-    return {
-      ...FALLBACK_CONTENT,
-      error: error.message
-    };
+    return FALLBACK_CONTENT;
   }
 }

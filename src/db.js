@@ -1,9 +1,15 @@
 import sqlite3 from 'sqlite3';
 import { promisify } from 'util';
+import { dirname, join } from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
 export class NewsDB {
   constructor() {
-    this.db = new sqlite3.Database(':memory:');
+    const dbPath = join(__dirname, '..', 'data', 'news.db');
+    this.db = new sqlite3.Database(dbPath);
     // Convert callback-based methods to promises
     this.run = promisify(this.db.run.bind(this.db));
     this.all = promisify(this.db.all.bind(this.db));
@@ -69,5 +75,14 @@ export class NewsDB {
       SELECT value FROM metadata WHERE key = 'last_fetch'
     `);
     return result ? result.value : null;
+  }
+
+  async close() {
+    return new Promise((resolve, reject) => {
+      this.db.close((err) => {
+        if (err) reject(err);
+        else resolve();
+      });
+    });
   }
 }
